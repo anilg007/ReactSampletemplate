@@ -1,5 +1,7 @@
 import React, { Component } from 'react';
 
+
+
 class StoreItem extends Component {
     constructor(props) {
         super(props);

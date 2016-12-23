@@ -1,11 +1,9 @@
-"use strict";
-
 var _extends = Object.assign || function (target) { for (var i = 1; i < arguments.length; i++) { var source = arguments[i]; for (var key in source) { if (Object.prototype.hasOwnProperty.call(source, key)) { target[key] = source[key]; } } } return target; };
 
 function _objectWithoutProperties(obj, keys) { var target = {}; for (var i in obj) { if (keys.indexOf(i) >= 0) continue; if (!Object.prototype.hasOwnProperty.call(obj, i)) continue; target[i] = obj[i]; } return target; }
 
 var initialData = {
-  "people": [{
+  "characters": [{
     "name": "Luke Skywalker",
     "url": "https://swapi.co/api/people/1/"
   }, {
@@ -389,6 +387,7 @@ var SelectedCharacterView = function SelectedCharacterView(_ref9) {
       LoadingIndicator,
       person,
       React.createElement(PersonCard, { person: person.data }),
+      <PersonCard />,
       React.createElement(
         "h3",
         { style: { marginTop: '1rem' } },
@@ -421,48 +420,3 @@ var AppLayout = function AppLayout(_ref10) {
     empty ? React.createElement(IconMessage, { icon: "home", variant: "", header: "Welcome", message: "Please select a character from the menu" }) : React.createElement(SelectedCharacterView, props)
   );
 };
-
-var App = React.createClass({
-  displayName: "App",
-  render: function render() {
-    return React.createElement(AppLayout, _extends({}, characterSelection(this.state), { onCharacterSelected: this.selectCharacter }));
-  },
-  getInitialState: function getInitialState() {
-    return initialState(this.props.initialData);
-  },
-  componentDidMount: function componentDidMount() {
-    // uncomment this line to automatically load first character
-    // this.selectCharacter(this.state.characters[0])
-  },
-
-  // patchFn :: state -> patch, where patch is an object with props to be merged on state
-  updateState: function updateState(patchFn) {
-    var _this = this;
-
-    this.setState(patchFn(this.state), function () {
-      // for debugging
-      console.log('state', _this.state);
-      console.log('selection', characterSelection(_this.state));
-    });
-  },
-
-  // dispatch:: (state -> state | (dispatch, getState) -> ())
-  dispatch: function dispatch(fn) {
-    var _this2 = this;
-
-    if (fn.length === 1) {
-      this.updateState(fn);
-      return Promise.resolve();
-    } else {
-      return fn(this.dispatch, function () {
-        return _this2.state;
-      });
-    }
-  },
-  selectCharacter: function selectCharacter(character) {
-    this.dispatch(characterSelectedEvent(character));
-    this.dispatch(loadPersonPage(character.url)).catch(function () {});
-  }
-});
-
-ReactDOM.render(React.createElement(App, { initialData: initialData }), document.getElementById('app'));
