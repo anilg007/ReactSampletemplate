@@ -1,0 +1,293 @@
+const initialData = {
+  "characters": [{
+    "name": "Luke Skywalker",
+    "url": "https://swapi.co/api/people/1/"
+  }, {
+    "name": "Darth Vader",
+    "url": "https://swapi.co/api/people/4/"
+  }, {
+    "name": "Obi-wan Kenobi",
+    "url": "https://swapi.co/api/people/unknown/"
+  }, {
+    "name": "R2-D2",
+    "url": "https://swapi.co/api/people/2/"
+  }]
+}
+
+const initialState = (initialData) => ({
+  resources: {}, // cache of API resources (people, films, spieces, planets, vehicles etc) by url
+  pages: {}, // cache of data assembled to render each page by url
+  characters: initialData.characters, // Array of characters we are displaying with shape {name, url}
+  selectedCharacter: {}
+})
+
+// All requests to API have to be https to prevent browser mixed content warnings
+const https = (url) => url.replace(/^http(s)?/, 'https')
+
+const fetch = (url) => {
+  // Return native browser promise, not jQuery deferrable
+  return new Promise((resolve, reject) => {
+    $.ajax({
+      url: https(url),
+      contentType: 'application/json',
+      dataType: 'json'
+    }).then((data, textStatus, jqXHR) => {
+      resolve(data)
+    }, (jqXHR, textStatus, errorThrown) => {
+      reject(new Error(jqXHR.responseJSON.detail))
+    })
+  })
+}
+
+// Return normalized url to be used as key on objects. 
+// Will start with http:// because all data from the api uses http:// urls
+const key = (url) => url.replace(/^http(s)?/, 'http')
+
+// Define events that transform state, each event has signature :: params -> state -> state
+// (url, data) -> state::{resources: {url: any}} -> state::{resources: {url: {data, loaded, error}}}
+const resourceLoadedEvent = (url, data) => R.assocPath(['resources', key(url)], {
+  data,
+  loaded: true,
+  error: null
+})
+const resourceFailedEvent = (url, error) => R.assocPath(['resources', key(url)], {
+  data: {},
+  loaded: true,
+  error: error
+})
+const resourceInPendingState = () => ({
+  loaded: false,
+  data: {}
+})
+
+// define async "commands" that ultimately dispatch events to the store.
+// Command signature :: params -> (dispatch, getState) -> Promise
+
+// fetchResource caches API response in the state, and returns a promise of the cached or fetched data
+const fetchResource = (url) => (dispatch, getState) => {
+  const resource = R.pathOr(resourceInPendingState(), ['resources', key(url)], getState())
+  if (resource.loaded) {
+    if (resource.error) {
+      return Promise.reject(resource.error)
+    } else {
+      return Promise.resolve(resource.data)
+    }
+  } else {
+    return fetch(url).then(data => {
+      dispatch(resourceLoadedEvent(url, data))
+      return data
+    }, err => {
+      dispatch(resourceFailedEvent(url, err))
+      return Promise.reject(err)
+    })
+  }
+}
+
+const loadPersonPage = (url) => (dispatch, getState) => {
+  const fetchResourceSet = (property) => (data) => {
+    return Promise.resolve(R.prop(property, data))
+      .then(R.map(url => dispatch(fetchResource(url))))
+      .then(promises => Promise.all(promises))
+      .then(list => R.assoc(property, list, data))
+  }
+  const dispatchPageLoaded = (url) => data => {
+    dispatch(pageLoadedEvent(url, data))
+    return data
+  }
+  const dispatchPageFailed = (url) => error => {
+    dispatch(pageFailedEvent(url, error))
+    return Promise.reject(error)
+  }
+  // compose a promise to assemble all data for a person
+  return dispatch(fetchResource(url))
+    .then(fetchResourceSet('films'))
+    .then(fetchResourceSet('starships')) // just for kicks, not rendered yet
+    .then(fetchResourceSet('vehicles')) // just for kicks, not rendered yet
+    .then(dispatchPageLoaded(url), dispatchPageFailed(url))
+}
+
+const pageLoadedEvent = (url, data) => R.assocPath(['pages', key(url)], {
+  data,
+  loaded: true,
+  error: null
+})
+const pageFailedEvent = (url, error) => R.assocPath(['pages', key(url)], {
+  data: {},
+  loaded: true,
+  error: error
+})
+
+// Define several helpers to select data from state
+// {k: (state -> v), ...} -> state -> {k: v, ...}
+const selectSpec = R.applySpec
+  // [(state -> a), (state -> b), ...] -> ((a, b, ...) -> c) -> state -> c
+const select = R.flip(R.converge)
+//const select = R.curry((selectors, final) => R.pipe(
+//  R.of,
+//  R.ap(selectors),
+//  R.apply(final)
+//))
+
+// ({*} -> Boolean) -> property -> {*} -> {*, property: predicate()}
+const assocIf = R.curry((predicate, property) => R.ifElse(predicate, R.assoc(property, true), R.assoc(property, false)))
+
+const characterSelectedEvent = (character) => R.assoc('selectedCharacter', character)
+const sameCharacter = c1 => c2 => (c1 && c2 && c1.url && c2.url && key(c1.url) === key(c2.url))
+const characterIsSelected = R.pathSatisfies(url => url && url.length > 0, ['selectedCharacter', 'url'])
+const selectionIsEmpty = R.complement(characterIsSelected)
+const selectedCharacter = R.propOr({url: ''}, 'selectedCharacter')
+
+const emptySelection = selectSpec({
+  empty: R.always(true),
+  characters: R.prop('characters')
+})
+const selectedSelection = selectSpec({
+  empty: R.always(false),
+  characters: select(
+    [selectedCharacter, R.prop('characters')],
+    (character, characters) => R.map(assocIf(sameCharacter(character), 'selected'), characters)
+  ),
+  person: select(
+    [selectedCharacter, R.prop('pages')],
+    (character, pages) => R.propOr(resourceInPendingState(), key(character.url), pages)
+  )
+})
+
+// final selector for the screen
+const characterSelection = R.ifElse(selectionIsEmpty, emptySelection, selectedSelection)
+
+const IconMessage = ({icon, variant, header, message}) => (
+  <div className={`ui ${variant} icon message`}>
+    <i className={`${icon} icon`}></i>
+    <div className="content">
+      <div className="header">
+        {header}
+      </div>
+      <p>{message}</p>
+    </div>
+  </div>
+)
+
+const LoadingIndicator = ({loaded, error, children}) => {
+  if (loaded) {
+    return error ?
+      <IconMessage icon="warning sign" variant="negative" header="Error" message={error.message}/> :
+      <div>{children}</div>
+  } else {
+    return <IconMessage icon="notched circle loading" variant="" header="Just one second" message="We're fetching that content for you."/>
+  }
+}
+
+const EmptyList = ({message}) => (
+  <IconMessage icon="inbox" variant="" header="Empty" message={message}/>
+)
+
+const FilmListing = ({film}) => (
+  <div className="ui card">
+    <div className="content">
+      <div className="header">{film.title}</div>
+      <div className="meta">
+        <span>Release date</span>
+        <a>{film.release_date}</a>
+      </div>
+      <div className="description">{film.opening_crawl}</div>
+    </div>
+    <div className="extra content">
+      <div><span>Director</span> <span>{film.director}</span></div>
+      <div><span>Producer</span> <span>{film.producer}</span></div>
+    </div>
+  </div>
+)
+
+const FilmList = ({films}) => (
+  <div className="ui three stackable cards">
+    { films.map(film => <FilmListing key={film.url} film={film}/>) }
+  </div>
+)
+
+const PersonCard = ({person}) => (
+  <div className="ui card">
+    <div className="content">
+      <div className="header">{person.name}</div>
+      <div className="meta">
+        <span>Skin color</span><a>{person.skin_color}</a>
+      </div>
+    </div>
+  </div>
+)
+
+const CharacterMenuItem = ({character, onSelect}) => (
+  <a className={`${character.selected ? 'active' : ''} item`} onClick={onSelect}>{character.name}</a>
+)
+
+const CharacterMenu = ({characters, onCharacterSelected}) => (
+  <div className='ui secondary pointing menu'>
+    {characters.map(character => <CharacterMenuItem key={key(character.url)} character={character} onSelect={() => onCharacterSelected(character)}/>)}
+  </div>
+)
+
+const SelectedCharacterView = ({person}) => (
+  <div style={{marginTop: '1rem'}}>
+    <LoadingIndicator {...person}>
+      <PersonCard person={person.data}/>
+      <h3 style={{marginTop: '1rem'}}>Movies starring {person.name}</h3>
+      { 
+        person.data.films && person.data.films.length > 0
+          ? <FilmList films={person.data.films}/>
+          : <EmptyList message={`There are no movies for ${person.data.name}`}/>
+      }
+    </LoadingIndicator>
+  </div>
+)
+
+const AppLayout = ({empty, characters, onCharacterSelected, ...props}) => (
+  <div className='ui container'>
+    <h1>Star Wars Characters</h1>
+    <CharacterMenu 
+      characters={characters} 
+      onCharacterSelected={onCharacterSelected}/>
+    {
+      empty
+        ? <IconMessage icon="home" variant="" header="Welcome" message="Please select a character from the menu"/>
+        : <SelectedCharacterView {...props}/>
+    }
+  </div>
+)
+
+const App = React.createClass({
+  render() {
+    return (
+      <AppLayout {...characterSelection(this.state)} onCharacterSelected={this.selectCharacter}/>
+    )
+  },
+  getInitialState() {
+    return initialState(this.props.initialData)
+  },
+  componentDidMount() {
+    // uncomment this line to automatically load first character
+    // this.selectCharacter(this.state.characters[0])
+  },
+  // patchFn :: state -> patch, where patch is an object with props to be merged on state
+  updateState(patchFn) {
+    this.setState(patchFn(this.state), () => {
+      // for debugging
+      console.log('state', this.state)
+      console.log('selection', characterSelection(this.state))
+    })
+  },
+  // dispatch:: (state -> state | (dispatch, getState) -> ())
+  dispatch (fn) {
+    if (fn.length === 1) {
+      this.updateState(fn)
+      return Promise.resolve()
+    } else {
+      return fn(this.dispatch, () => this.state)
+    }
+  },
+  selectCharacter(character) {
+    this.dispatch(characterSelectedEvent(character))
+    this.dispatch(loadPersonPage(character.url)).catch(() => {})
+  }
+})
+
+ReactDOM.render(<App initialData={initialData} />, document.getElementById('app'))
